@@ -1,6 +1,6 @@
 // src/components/SmartSearch.jsx - PROFESSIONAL REDESIGN
 import { useState, useEffect, useMemo } from 'react';
-import { Search, Zap, Target, Tag, ChevronDown, ChevronUp, Package, Edit3, Save, X, Upload, History, Clock, LogOut, User as UserIcon, Shield, Filter, TrendingUp, TrendingDown, Database, Box, FileText } from 'lucide-react';
+import { Search, Zap, Target, Tag, ChevronDown, ChevronUp, Package, Edit3, Save, X, Upload, History, Clock, LogOut, User as UserIcon, Shield, Filter, TrendingUp, TrendingDown, Database, Box, FileText, LayoutGrid, LayoutList, Activity, ChevronRight } from 'lucide-react';
 import { db } from '../firebase';
 import { collection, getDocs, doc, updateDoc, addDoc, serverTimestamp, query, where, orderBy, limit } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
@@ -18,6 +18,35 @@ const removeDiacritics = (str) => {
 const extractTokens = (text) => {
   if (!text) return [];
   return text.split(/[\/\\\-_,;|\s]+/).filter(t => t.length > 0);
+};
+
+// Trích xuất NCC từ attributes (format: "NHÀ CUNG CẤP:XXX" hoặc "NCC:XXX")
+const extractVendor = (attributes) => {
+  if (!attributes) return '';
+  const match = attributes.match(/(?:NHÀ CUNG CẤP|NCC|VENDOR|SUPPLIER)[:\s]*([^,;\n]+)/i);
+  return match ? match[1].trim() : '';
+};
+
+// Tạo màu nhất quán cho NCC (hash-based)
+const getVendorColor = (vendor) => {
+  if (!vendor) return { bg: 'bg-slate-100', text: 'text-slate-600', border: 'border-slate-300' };
+
+  const colors = [
+    { bg: 'bg-blue-100', text: 'text-blue-700', border: 'border-blue-300' },
+    { bg: 'bg-emerald-100', text: 'text-emerald-700', border: 'border-emerald-300' },
+    { bg: 'bg-purple-100', text: 'text-purple-700', border: 'border-purple-300' },
+    { bg: 'bg-orange-100', text: 'text-orange-700', border: 'border-orange-300' },
+    { bg: 'bg-pink-100', text: 'text-pink-700', border: 'border-pink-300' },
+    { bg: 'bg-cyan-100', text: 'text-cyan-700', border: 'border-cyan-300' },
+    { bg: 'bg-amber-100', text: 'text-amber-700', border: 'border-amber-300' },
+    { bg: 'bg-rose-100', text: 'text-rose-700', border: 'border-rose-300' },
+  ];
+
+  let hash = 0;
+  for (let i = 0; i < vendor.length; i++) {
+    hash = vendor.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return colors[Math.abs(hash) % colors.length];
 };
 
 // Tính khoảng cách Levenshtein (fuzzy matching)
@@ -108,23 +137,21 @@ const calculateFieldScoreFuzzy = (query, text, fieldWeight = 1) => {
 };
 
 // Tính điểm match cho 1 field - EXACT MODE (Tìm chính xác - CẢI TIẾN)
+// GIỮ LẠI cho backward compatibility (không dùng nữa)
 const calculateFieldScoreExact = (query, text, fieldWeight = 1) => {
   if (!query || !text) return 0;
 
   const normalizedQuery = removeDiacritics(query.toLowerCase().trim());
   const normalizedText = removeDiacritics(text.toLowerCase().trim());
 
-  // 1. PERFECT MATCH - toàn bộ query khớp toàn bộ text (1000 điểm)
   if (normalizedText === normalizedQuery) {
     return 1000 * fieldWeight;
   }
 
-  // 2. CONTAINS EXACT PHRASE - text chứa đúng cụm từ query (800 điểm)
   if (normalizedText.includes(normalizedQuery)) {
     return 800 * fieldWeight;
   }
 
-  // 3. TOKEN MATCHING - khớp từng từ riêng lẻ
   const queryTokens = extractTokens(normalizedQuery);
   const textTokens = extractTokens(normalizedText);
 
@@ -135,14 +162,191 @@ const calculateFieldScoreExact = (query, text, fieldWeight = 1) => {
     }
   });
 
-  // Nếu khớp ÍT NHẤT 1 token → cho điểm (thay vì yêu cầu tất cả)
   if (exactMatches > 0) {
-    // Điểm phụ thuộc vào % tokens khớp
     const matchRatio = exactMatches / queryTokens.length;
     return 600 * matchRatio * fieldWeight;
   }
 
   return 0;
+};
+
+// EXACT MODE - TIER-BASED (Cải tiến cho ngành phụ tùng)
+// Tier 1: Name (ưu tiên cao nhất)
+// Tier 2: NCC/Vendor (bộ lọc thực tế)
+// Tier 3: Code/Attributes (thu hẹp cuối)
+const calculateFieldScoreExactTiered = (query, product) => {
+  if (!query.trim()) return 0;
+
+  const normalizedQuery = removeDiacritics(query.toLowerCase().trim());
+  const queryTokens = extractTokens(normalizedQuery);
+
+  // Extract fields
+  const name = removeDiacritics((product.name || '').toLowerCase());
+  const vendor = removeDiacritics(extractVendor(product.attributes).toLowerCase());
+  const code = removeDiacritics((product.code || '').toLowerCase());
+  const attributes = removeDiacritics((product.attributes || '').toLowerCase());
+  const brand = removeDiacritics((product.brand || '').toLowerCase());
+
+  let tier1Score = 0; // Name
+  let tier2Score = 0; // NCC/Vendor
+  let tier3Score = 0; // Code/Attributes
+
+  // Track matched tokens
+  let nameMatches = 0;
+  let vendorMatches = 0;
+  let codeMatches = 0;
+
+  queryTokens.forEach(qToken => {
+    // Tier 1: Name matching
+    if (name.includes(qToken)) {
+      nameMatches++;
+      if (name === qToken) tier1Score += 1000;
+      else if (name.startsWith(qToken)) tier1Score += 800;
+      else tier1Score += 600;
+    }
+
+    // Tier 2: Vendor/NCC matching
+    if (vendor && vendor.includes(qToken)) {
+      vendorMatches++;
+      if (vendor === qToken) tier2Score += 900;
+      else if (vendor.startsWith(qToken)) tier2Score += 700;
+      else tier2Score += 500;
+    }
+    // Also check brand as fallback
+    if (brand && brand.includes(qToken)) {
+      vendorMatches++;
+      tier2Score += 400;
+    }
+
+    // Tier 3: Code/Attributes matching
+    if (code && code.includes(qToken)) {
+      codeMatches++;
+      tier3Score += 300;
+    }
+    if (attributes && attributes.includes(qToken)) {
+      tier3Score += 200;
+    }
+  });
+
+  // BONUS: Cross-match (khớp cả Name + NCC)
+  const crossMatchBonus = (nameMatches > 0 && vendorMatches > 0) ? 500 : 0;
+
+  // Final score: Tier1 + Tier2 + Tier3 + Bonus
+  const totalScore = tier1Score + tier2Score + tier3Score + crossMatchBonus;
+
+  // Require at least 1 token match
+  if (nameMatches === 0 && vendorMatches === 0 && codeMatches === 0) {
+    return 0;
+  }
+
+  return totalScore;
+};
+
+// FUZZY MODE - TIER-BASED (Smart Suggest - Cải tiến)
+// Tier 1: Name (x10) - Ưu tiên cao nhất khi tìm mông lung
+// Tier 2: NCC/Vendor (x5) - Nhà cung cấp quan trọng thứ 2
+// Tier 3: Attributes (x2) - Thuộc tính bổ sung
+// Tier 4: Code (x1) - Mã hàng chỉ là yếu tố phụ
+const calculateFieldScoreFuzzyTiered = (query, product) => {
+  if (!query.trim()) return 0;
+
+  const normalizedQuery = removeDiacritics(query.toLowerCase().trim());
+  const queryTokens = extractTokens(normalizedQuery);
+
+  // Extract fields
+  const name = removeDiacritics((product.name || '').toLowerCase());
+  const vendor = removeDiacritics(extractVendor(product.attributes).toLowerCase());
+  const brand = removeDiacritics((product.brand || '').toLowerCase());
+  const attributes = removeDiacritics((product.attributes || '').toLowerCase());
+  const code = removeDiacritics((product.code || '').toLowerCase());
+  const barcode = removeDiacritics((product.barcode || '').toLowerCase());
+
+  let totalScore = 0;
+  let nameMatches = 0;
+  let vendorMatches = 0;
+
+  // Lớp 1: Token Match (Chính xác từng từ)
+  queryTokens.forEach(qToken => {
+    // Tier 1: Name (Weight x10)
+    if (name.includes(qToken)) {
+      nameMatches++;
+      if (name === qToken) totalScore += 1000 * 10;
+      else if (name.startsWith(qToken)) totalScore += 500 * 10;
+      else totalScore += 300 * 10;
+    }
+
+    // Tier 2: NCC/Vendor (Weight x5)
+    if (vendor && vendor.includes(qToken)) {
+      vendorMatches++;
+      if (vendor === qToken) totalScore += 1000 * 5;
+      else if (vendor.startsWith(qToken)) totalScore += 500 * 5;
+      else totalScore += 300 * 5;
+    }
+    // Also check brand
+    if (brand && brand.includes(qToken)) {
+      vendorMatches++;
+      if (brand === qToken) totalScore += 800 * 5;
+      else totalScore += 200 * 5;
+    }
+
+    // Tier 3: Attributes (Weight x2)
+    if (attributes && attributes.includes(qToken)) {
+      totalScore += 300 * 2;
+    }
+
+    // Tier 4: Code/Barcode (Weight x1)
+    if (code && code.includes(qToken)) {
+      if (code === qToken) totalScore += 1000;
+      else if (code.startsWith(qToken)) totalScore += 500;
+      else totalScore += 200;
+    }
+    if (barcode && barcode.includes(qToken)) {
+      totalScore += 200;
+    }
+  });
+
+  // Lớp 3: Levenshtein (Sai số) - Chỉ áp dụng cho từ dài >= 4 ký tự
+  if (totalScore === 0) {
+    const nameTokens = extractTokens(name);
+    const vendorTokens = extractTokens(vendor);
+
+    queryTokens.forEach(qToken => {
+      if (qToken.length >= 4) {
+        // Check name với sai số
+        nameTokens.forEach(nToken => {
+          if (nToken.length >= 4) {
+            const distance = levenshteinDistance(qToken, nToken);
+            const maxLen = Math.max(qToken.length, nToken.length);
+            const similarity = (maxLen - distance) / maxLen;
+            if (similarity >= 0.7) {
+              totalScore += similarity * 200 * 10; // Weight x10 cho name
+              nameMatches++;
+            }
+          }
+        });
+
+        // Check vendor với sai số
+        vendorTokens.forEach(vToken => {
+          if (vToken.length >= 4) {
+            const distance = levenshteinDistance(qToken, vToken);
+            const maxLen = Math.max(qToken.length, vToken.length);
+            const similarity = (maxLen - distance) / maxLen;
+            if (similarity >= 0.7) {
+              totalScore += similarity * 200 * 5; // Weight x5 cho vendor
+              vendorMatches++;
+            }
+          }
+        });
+      }
+    });
+  }
+
+  // BONUS: Cross-match (khớp cả Name + NCC)
+  if (nameMatches > 0 && vendorMatches > 0) {
+    totalScore += 1000;
+  }
+
+  return totalScore;
 };
 
 // Hàm tìm kiếm chính với 2 chế độ
@@ -151,46 +355,31 @@ const performSearch = (query, products, searchMode = 'fuzzy') => {
     return products.slice(0, 50);
   }
 
-  const calculateScore = searchMode === 'fuzzy' ? calculateFieldScoreFuzzy : calculateFieldScoreExact;
-
-  const scored = products.map(product => {
-    const scores = [];
-
-    // Tính điểm cho từng field với weight khác nhau
-    if (product.code) {
-      scores.push(calculateScore(query, product.code, 10));
-    }
-    if (product.barcode) {
-      scores.push(calculateScore(query, product.barcode, 9));
-    }
-    if (product.name) {
-      scores.push(calculateScore(query, product.name, 5));
-    }
-    if (product.attributes) {
-      scores.push(calculateScore(query, product.attributes, 4));
-    }
-    if (product.brand) {
-      scores.push(calculateScore(query, product.brand, 3));
-    }
-    if (product.group) {
-      scores.push(calculateScore(query, product.group, 2));
-    }
-
-    // Lấy điểm MAX (không phải SUM)
-    const maxScore = Math.max(...scores, 0);
-
-    return {
+  if (searchMode === 'exact') {
+    // EXACT MODE: Sử dụng Tier-based scoring (Name > NCC > Code)
+    const scored = products.map(product => ({
       ...product,
-      score: maxScore
-    };
-  });
+      score: calculateFieldScoreExactTiered(query, product),
+      vendor: extractVendor(product.attributes) // Cache vendor for display
+    }));
 
-  const results = scored
+    return scored
+      .filter(p => p.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 50);
+  }
+
+  // FUZZY MODE: Sử dụng Smart Suggest (Name > NCC > Attributes > Code)
+  const scored = products.map(product => ({
+    ...product,
+    score: calculateFieldScoreFuzzyTiered(query, product),
+    vendor: extractVendor(product.attributes) // Cache vendor for display
+  }));
+
+  return scored
     .filter(p => p.score > 0)
     .sort((a, b) => b.score - a.score)
-    .slice(0, searchMode === 'exact' ? 50 : 50); // Exact match hiển thị tối đa 50 sản phẩm
-
-  return results;
+    .slice(0, 50);
 };
 
 // ==================== COMPONENT ====================
@@ -212,6 +401,9 @@ export default function SmartSearch() {
   const [viewingHistory, setViewingHistory] = useState(null);
   const [priceHistory, setPriceHistory] = useState([]);
   const [showAuditLog, setShowAuditLog] = useState(false);
+  const [viewMode, setViewMode] = useState('card'); // 'card' | 'table'
+  const [recentActivities, setRecentActivities] = useState([]); // Hoạt động gần đây
+  const [showActivitySidebar, setShowActivitySidebar] = useState(false); // Sidebar toggle
 
   // Load dữ liệu từ Firestore
   useEffect(() => {
@@ -504,6 +696,22 @@ export default function SmartSearch() {
           : p
       ));
 
+      // Thêm vào Recent Activities
+      const changedFields = changes.filter(c => c.oldVal !== c.newVal);
+      if (changedFields.length > 0) {
+        const activity = {
+          id: Date.now(),
+          productId,
+          productCode: editForm.code,
+          productName: editForm.name,
+          vendor: extractVendor(editForm.attributes),
+          changedFields: changedFields.map(c => c.field),
+          timestamp: new Date(),
+          source: 'inline_edit'
+        };
+        setRecentActivities(prev => [activity, ...prev].slice(0, 20)); // Giữ max 20
+      }
+
       setSaving(false);
       setEditingId(null);
       setEditForm({});
@@ -556,6 +764,24 @@ export default function SmartSearch() {
                   </div>
                 </div>
               </div>
+
+              {/* Activity Sidebar Toggle */}
+              <button
+                onClick={() => setShowActivitySidebar(!showActivitySidebar)}
+                className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-all text-sm font-semibold relative ${
+                  showActivitySidebar
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-indigo-100 text-indigo-700 hover:bg-indigo-200'
+                }`}
+                title="Hoạt động gần đây"
+              >
+                <Activity className="w-4 h-4" strokeWidth={2} />
+                {recentActivities.length > 0 && (
+                  <span className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white text-xs font-bold rounded-full flex items-center justify-center">
+                    {recentActivities.length}
+                  </span>
+                )}
+              </button>
 
               {/* Audit Log Button - Admin Only */}
               {isAdmin && (
@@ -639,15 +865,15 @@ export default function SmartSearch() {
               type="text"
               placeholder={
                 searchMode === 'fuzzy'
-                  ? 'Search 18,000+ products by code, name, brand...'
-                  : 'Exact search by supplier, code...'
+                  ? 'Tìm gần đúng theo mã, tên, thuộc tính...'
+                  : 'Tìm chính xác theo Tên + NCC (vd: Dây curoa Gates)'
               }
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className={`w-full pl-12 pr-4 py-3 text-sm border-2 rounded-lg focus:outline-none focus:ring-2 focus:border-transparent transition-all bg-white text-slate-900 placeholder:text-slate-400 ${
                 searchMode === 'fuzzy'
-                  ? 'border-orange-400 focus:ring-orange-500'
-                  : 'border-blue-600 focus:ring-blue-500'
+                  ? 'border-indigo-400 focus:ring-indigo-500'
+                  : 'border-emerald-500 focus:ring-emerald-500'
               }`}
               autoFocus
             />
@@ -656,29 +882,59 @@ export default function SmartSearch() {
           {/* Search Mode Toggle & Results Count */}
           <div className="flex items-center justify-between">
             {/* Mode Selector - CẢI TIẾN: Màu sắc tương phản mạnh */}
-            <div className="inline-flex items-center bg-slate-100 rounded-lg p-1 border border-slate-200">
-              <button
-                onClick={() => setSearchMode('fuzzy')}
-                className={`flex items-center gap-1.5 px-4 py-2 rounded-md transition-all text-xs font-bold uppercase tracking-wide ${
-                  searchMode === 'fuzzy'
-                    ? 'bg-orange-500 text-white shadow-md'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Zap className="w-4 h-4" strokeWidth={2.5} />
-                Fuzzy
-              </button>
-              <button
-                onClick={() => setSearchMode('exact')}
-                className={`flex items-center gap-1.5 px-4 py-2 rounded-md transition-all text-xs font-bold uppercase tracking-wide ${
-                  searchMode === 'exact'
-                    ? 'bg-blue-700 text-white shadow-md'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                <Target className="w-4 h-4" strokeWidth={2.5} />
-                Exact
-              </button>
+            <div className="flex items-center gap-3">
+              <div className="inline-flex items-center bg-slate-100 rounded-lg p-1 border border-slate-200">
+                <button
+                  onClick={() => setSearchMode('fuzzy')}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-md transition-all text-xs font-bold uppercase tracking-wide ${
+                    searchMode === 'fuzzy'
+                      ? 'bg-indigo-600 text-white shadow-md'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Zap className="w-4 h-4" strokeWidth={2.5} />
+                  Fuzzy
+                </button>
+                <button
+                  onClick={() => setSearchMode('exact')}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-md transition-all text-xs font-bold uppercase tracking-wide ${
+                    searchMode === 'exact'
+                      ? 'bg-emerald-600 text-white shadow-md'
+                      : 'text-slate-600 hover:text-slate-900'
+                  }`}
+                >
+                  <Target className="w-4 h-4" strokeWidth={2.5} />
+                  Exact
+                </button>
+              </div>
+
+              {/* View Mode Toggle - Chỉ hiện khi mode Exact */}
+              {searchMode === 'exact' && (
+                <div className="inline-flex items-center bg-slate-100 rounded-lg p-1 border border-slate-200">
+                  <button
+                    onClick={() => setViewMode('card')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${
+                      viewMode === 'card'
+                        ? 'bg-white text-slate-900 shadow'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                    title="Card View"
+                  >
+                    <LayoutGrid className="w-4 h-4" strokeWidth={2} />
+                  </button>
+                  <button
+                    onClick={() => setViewMode('table')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-all text-xs font-bold ${
+                      viewMode === 'table'
+                        ? 'bg-white text-slate-900 shadow'
+                        : 'text-slate-500 hover:text-slate-700'
+                    }`}
+                    title="Table View"
+                  >
+                    <LayoutList className="w-4 h-4" strokeWidth={2} />
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* Results Count */}
@@ -743,7 +999,90 @@ export default function SmartSearch() {
                   {searchQuery ? 'Try different keywords or fuzzy match mode' : 'Enter product code, name, or brand'}
                 </p>
               </div>
+            ) : searchMode === 'exact' && viewMode === 'table' ? (
+              /* ========== COMPACT TABLE VIEW (Exact Mode) ========== */
+              <div className="bg-white rounded-lg border border-slate-200 overflow-hidden">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-slate-100 sticky top-0 z-10">
+                      <tr>
+                        <th className="px-3 py-2.5 text-left font-bold text-slate-700 text-xs uppercase tracking-wide w-10">#</th>
+                        <th className="px-3 py-2.5 text-left font-bold text-slate-700 text-xs uppercase tracking-wide min-w-[200px]">Tên hàng</th>
+                        <th className="px-3 py-2.5 text-left font-bold text-slate-700 text-xs uppercase tracking-wide w-32">NCC</th>
+                        <th className="px-3 py-2.5 text-left font-bold text-slate-700 text-xs uppercase tracking-wide min-w-[150px]">Thuộc tính</th>
+                        {isAdmin && (
+                          <th className="px-3 py-2.5 text-right font-bold text-slate-700 text-xs uppercase tracking-wide w-28">Giá vốn</th>
+                        )}
+                        <th className="px-3 py-2.5 text-right font-bold text-slate-700 text-xs uppercase tracking-wide w-28">Giá bán</th>
+                        <th className="px-3 py-2.5 text-center font-bold text-slate-700 text-xs uppercase tracking-wide w-20">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100">
+                      {searchResults.map((product, index) => {
+                        const vendorColor = getVendorColor(product.vendor);
+                        const cleanAttributes = product.attributes
+                          ?.replace(/(?:NHÀ CUNG CẤP|NCC|VENDOR|SUPPLIER)[:\s]*[^,;\n]*/gi, '')
+                          .replace(/^[,;\s]+|[,;\s]+$/g, '')
+                          .trim() || '';
+
+                        return (
+                          <tr key={product.id} className="hover:bg-emerald-50 transition-colors">
+                            <td className="px-3 py-2 text-slate-500 font-mono text-xs">{index + 1}</td>
+                            <td className="px-3 py-2">
+                              <div className="font-semibold text-slate-900 truncate max-w-xs" title={product.name}>
+                                {highlightMatch(product.name || 'N/A', debouncedQuery)}
+                              </div>
+                              <div className="text-xs text-slate-500 font-mono">{product.code}</div>
+                            </td>
+                            <td className="px-3 py-2">
+                              {product.vendor ? (
+                                <span className={`inline-flex px-2 py-0.5 rounded text-xs font-bold border ${vendorColor.bg} ${vendorColor.text} ${vendorColor.border}`}>
+                                  {product.vendor}
+                                </span>
+                              ) : (
+                                <span className="text-slate-400 text-xs">-</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-slate-600 text-xs truncate max-w-[200px]" title={cleanAttributes}>
+                              {cleanAttributes || '-'}
+                            </td>
+                            {isAdmin && (
+                              <td className="px-3 py-2 text-right font-mono font-bold text-red-600 text-xs">
+                                {formatPrice(product.cost)}
+                              </td>
+                            )}
+                            <td className="px-3 py-2 text-right font-mono font-bold text-slate-900">
+                              {formatPrice(product.price)}
+                            </td>
+                            <td className="px-3 py-2 text-center">
+                              <div className="flex justify-center gap-1">
+                                <button
+                                  onClick={() => viewHistory(product)}
+                                  className="p-1 text-blue-600 hover:bg-blue-100 rounded transition-colors"
+                                  title="Lịch sử"
+                                >
+                                  <History className="w-3.5 h-3.5" />
+                                </button>
+                                {isAdmin && (
+                                  <button
+                                    onClick={() => startEdit(product)}
+                                    className="p-1 text-amber-600 hover:bg-amber-100 rounded transition-colors"
+                                    title="Sửa"
+                                  >
+                                    <Edit3 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             ) : (
+              /* ========== CARD VIEW (Default / Fuzzy Mode) ========== */
               searchResults.map((product, index) => {
                 const isEditing = editingId === product.id;
                 const isExpanded = expandedItems[product.id];
@@ -755,8 +1094,8 @@ export default function SmartSearch() {
                       isEditing
                         ? 'border-l-amber-500 border-amber-300 shadow-md ring-2 ring-amber-100'
                         : searchMode === 'fuzzy'
-                        ? 'border-l-orange-400 border-slate-200 hover:border-orange-500 hover:shadow-md'
-                        : 'border-l-blue-600 border-slate-200 hover:border-blue-700 hover:shadow-md'
+                        ? 'border-l-indigo-500 border-slate-200 hover:border-indigo-600 hover:shadow-md'
+                        : 'border-l-emerald-500 border-slate-200 hover:border-emerald-600 hover:shadow-md'
                     }`}
                   >
                     <div className="p-5">
@@ -817,6 +1156,12 @@ export default function SmartSearch() {
                                   <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-600 text-white rounded text-xs font-bold font-mono">
                                     <Tag className="w-3 h-3" strokeWidth={2.5} />
                                     {highlightMatch(product.code, debouncedQuery)}
+                                  </span>
+                                )}
+                                {/* NCC Tag với màu sắc riêng */}
+                                {product.vendor && (
+                                  <span className={`inline-flex px-2.5 py-1 rounded text-xs font-bold border ${getVendorColor(product.vendor).bg} ${getVendorColor(product.vendor).text} ${getVendorColor(product.vendor).border}`}>
+                                    {highlightMatch(product.vendor, debouncedQuery)}
                                   </span>
                                 )}
                                 {product.brand && (
@@ -1244,6 +1589,117 @@ export default function SmartSearch() {
           </div>
         </div>
       )}
+
+      {/* Activity Sidebar */}
+      {showActivitySidebar && (
+        <div className="fixed right-0 top-0 h-full w-80 bg-white shadow-2xl border-l border-slate-200 z-50 flex flex-col">
+          {/* Sidebar Header */}
+          <div className="bg-indigo-600 p-4 text-white">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Activity className="w-5 h-5" strokeWidth={2} />
+                <h3 className="font-bold">Hoạt động gần đây</h3>
+              </div>
+              <button
+                onClick={() => setShowActivitySidebar(false)}
+                className="p-1 hover:bg-indigo-700 rounded transition-all"
+              >
+                <X className="w-5 h-5" strokeWidth={2} />
+              </button>
+            </div>
+            <p className="text-sm text-indigo-200 mt-1">
+              Bấm vào để tìm lại sản phẩm
+            </p>
+          </div>
+
+          {/* Sidebar Content */}
+          <div className="flex-1 overflow-y-auto">
+            {recentActivities.length === 0 ? (
+              <div className="p-6 text-center">
+                <div className="inline-flex items-center justify-center w-12 h-12 bg-slate-100 rounded-full mb-3">
+                  <Clock className="w-6 h-6 text-slate-400" />
+                </div>
+                <p className="text-slate-500 text-sm">Chưa có hoạt động nào</p>
+                <p className="text-slate-400 text-xs mt-1">
+                  Các thay đổi sẽ hiển thị ở đây
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {recentActivities.map((activity) => {
+                  const vendorColor = getVendorColor(activity.vendor);
+                  const timeAgo = getTimeAgo(activity.timestamp);
+
+                  return (
+                    <button
+                      key={activity.id}
+                      onClick={() => {
+                        // Quick Access: Thực hiện Exact Search với mã sản phẩm
+                        setSearchMode('exact');
+                        setSearchQuery(activity.productCode);
+                        setShowActivitySidebar(false);
+                      }}
+                      className="w-full p-3 hover:bg-indigo-50 transition-colors text-left group"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm font-semibold text-slate-900 truncate group-hover:text-indigo-700">
+                            {activity.productName}
+                          </div>
+                          <div className="text-xs text-slate-500 font-mono mt-0.5">
+                            {activity.productCode}
+                          </div>
+                          <div className="flex items-center gap-2 mt-1.5">
+                            {activity.vendor && (
+                              <span className={`inline-flex px-1.5 py-0.5 rounded text-[10px] font-bold border ${vendorColor.bg} ${vendorColor.text} ${vendorColor.border}`}>
+                                {activity.vendor}
+                              </span>
+                            )}
+                            <span className="text-[10px] text-slate-400">
+                              Đã sửa: {activity.changedFields.join(', ')}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex flex-col items-end gap-1">
+                          <span className="text-[10px] text-slate-400">
+                            {timeAgo}
+                          </span>
+                          <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-indigo-500" />
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Sidebar Footer */}
+          {recentActivities.length > 0 && (
+            <div className="p-3 border-t border-slate-200 bg-slate-50">
+              <button
+                onClick={() => setRecentActivities([])}
+                className="w-full px-3 py-2 text-xs font-semibold text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all"
+              >
+                Xóa lịch sử
+              </button>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
+}
+
+// Helper function: Tính thời gian trôi qua
+function getTimeAgo(date) {
+  const now = new Date();
+  const diff = now - new Date(date);
+  const minutes = Math.floor(diff / 60000);
+  const hours = Math.floor(diff / 3600000);
+
+  if (minutes < 1) return 'Vừa xong';
+  if (minutes < 60) return `${minutes} phút trước`;
+  if (hours < 24) return `${hours} giờ trước`;
+  return new Date(date).toLocaleDateString('vi-VN');
 }
