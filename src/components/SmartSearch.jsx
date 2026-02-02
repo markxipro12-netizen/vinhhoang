@@ -509,7 +509,7 @@ export default function SmartSearch() {
       const jsonData = XLSX.utils.sheet_to_json(worksheet);
 
       let updated = 0;
-      let notFound = 0;
+      let created = 0;
       let priceChanged = 0;
 
       for (const row of jsonData) {
@@ -522,7 +522,57 @@ export default function SmartSearch() {
         const product = products.find(p => p.code === code);
 
         if (!product) {
-          notFound++;
+          // Tạo sản phẩm mới nếu mã chưa tồn tại
+          const newName = row['Tên hàng'] || row['name'] || '';
+          const newStock = parseFloat(row['Tồn kho'] || row['stock']) || 0;
+          const newUnit = row['Đơn vị'] || row['unit'] || '';
+          const newBrand = row['Thương hiệu'] || row['brand'] || '';
+          const newCategory = row['Nhóm hàng'] || row['category'] || '';
+          const newAttributes = row['Thuộc tính'] || row['attributes'] || '';
+
+          const newProductRef = await addDoc(collection(db, 'products'), {
+            code: code,
+            name: newName,
+            price: newPrice,
+            cost: newCost,
+            stock: newStock,
+            unit: newUnit,
+            brand: newBrand,
+            category: newCategory,
+            attributes: newAttributes,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+            createdBy: user?.email || 'bulk_upload'
+          });
+
+          // Thêm vào state local
+          setProducts(prev => [...prev, {
+            id: newProductRef.id,
+            code: code,
+            name: newName,
+            price: newPrice,
+            cost: newCost,
+            stock: newStock,
+            unit: newUnit,
+            brand: newBrand,
+            category: newCategory,
+            attributes: newAttributes
+          }]);
+
+          // Ghi log tạo sản phẩm mới
+          await addDoc(collection(db, 'auditLog'), {
+            productId: newProductRef.id,
+            productCode: code,
+            productName: newName,
+            fieldChanged: 'created',
+            oldValue: null,
+            newValue: { price: newPrice, cost: newCost, stock: newStock },
+            changedAt: serverTimestamp(),
+            changedBy: user?.email || 'bulk_upload',
+            source: 'excel_upload'
+          });
+
+          created++;
           continue;
         }
 
@@ -532,7 +582,8 @@ export default function SmartSearch() {
         const productRef = doc(db, 'products', product.id);
         await updateDoc(productRef, {
           price: newPrice,
-          cost: newCost
+          cost: newCost,
+          updatedAt: serverTimestamp()
         });
 
         if (newPrice !== oldPrice) {
@@ -579,7 +630,7 @@ export default function SmartSearch() {
       setBulkResult({
         total: jsonData.length,
         updated,
-        notFound,
+        created,
         priceChanged
       });
     } catch (err) {
@@ -835,8 +886,8 @@ export default function SmartSearch() {
                     <span className="ml-2 font-bold text-emerald-600">{bulkResult.updated}</span>
                   </div>
                   <div>
-                    <span className="text-slate-600 font-medium">Not Found:</span>
-                    <span className="ml-2 font-bold text-orange-600">{bulkResult.notFound}</span>
+                    <span className="text-slate-600 font-medium">Created:</span>
+                    <span className="ml-2 font-bold text-green-600">{bulkResult.created}</span>
                   </div>
                   <div>
                     <span className="text-slate-600 font-medium">Price Changes:</span>
