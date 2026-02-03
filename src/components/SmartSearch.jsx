@@ -512,6 +512,10 @@ export default function SmartSearch() {
       let created = 0;
       let priceChanged = 0;
 
+      // Lưu các thay đổi để cập nhật state một lần duy nhất
+      const newProducts = [];
+      const updatedProducts = new Map();
+
       for (const row of jsonData) {
         const code = row['Mã hàng'] || row['code'];
         const newPrice = parseFloat(row['Giá bán'] || row['price']) || 0;
@@ -545,8 +549,8 @@ export default function SmartSearch() {
             createdBy: user?.email || 'bulk_upload'
           });
 
-          // Thêm vào state local
-          setProducts(prev => [...prev, {
+          // Lưu vào mảng để cập nhật state sau
+          newProducts.push({
             id: newProductRef.id,
             code: code,
             name: newName,
@@ -557,7 +561,7 @@ export default function SmartSearch() {
             brand: newBrand,
             category: newCategory,
             attributes: newAttributes
-          }]);
+          });
 
           // Ghi log tạo sản phẩm mới
           await addDoc(collection(db, 'auditLog'), {
@@ -618,14 +622,21 @@ export default function SmartSearch() {
           priceChanged++;
         }
 
-        setProducts(prev => prev.map(p =>
-          p.id === product.id
-            ? { ...p, price: newPrice, cost: newCost }
-            : p
-        ));
+        // Lưu vào Map để cập nhật state sau
+        updatedProducts.set(product.id, { price: newPrice, cost: newCost });
 
         updated++;
       }
+
+      // Cập nhật state MỘT LẦN DUY NHẤT sau khi xử lý xong
+      setProducts(prev => {
+        let result = prev.map(p =>
+          updatedProducts.has(p.id)
+            ? { ...p, ...updatedProducts.get(p.id) }
+            : p
+        );
+        return [...result, ...newProducts];
+      });
 
       setBulkResult({
         total: jsonData.length,
@@ -1501,6 +1512,7 @@ export default function SmartSearch() {
                     }
 
                     const timestamp = record.changedAt?.toDate?.() || new Date();
+                    const isCreated = record.fieldChanged === 'created';
                     const isNumericField = ['price', 'cost', 'stock'].includes(record.fieldChanged);
                     const isIncrease = record.delta > 0;
 
@@ -1511,23 +1523,31 @@ export default function SmartSearch() {
                       stock: 'Stock',
                       name: 'Product Name',
                       code: 'Product Code',
-                      attributes: 'Description/Attributes'
+                      attributes: 'Description/Attributes',
+                      created: 'Product Created'
                     };
 
                     return (
                       <div
                         key={record.id}
                         className={`p-4 rounded-lg border ${
-                          isNumericField
-                            ? isIncrease
-                              ? 'bg-red-50 border-red-200'
-                              : 'bg-emerald-50 border-emerald-200'
-                            : 'bg-blue-50 border-blue-200'
+                          isCreated
+                            ? 'bg-purple-50 border-purple-200'
+                            : isNumericField
+                              ? isIncrease
+                                ? 'bg-red-50 border-red-200'
+                                : 'bg-emerald-50 border-emerald-200'
+                              : 'bg-blue-50 border-blue-200'
                         }`}
                       >
                         <div className="flex items-center justify-between mb-3">
                           <div className="flex items-center gap-3">
-                            {isNumericField ? (
+                            {isCreated ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-bold bg-purple-600 text-white">
+                                <Package className="w-3 h-3" strokeWidth={2.5} />
+                                NEW PRODUCT
+                              </span>
+                            ) : isNumericField ? (
                               <span className={`inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-bold ${
                                 isIncrease
                                   ? 'bg-red-600 text-white'
@@ -1565,30 +1585,42 @@ export default function SmartSearch() {
                           </div>
                         </div>
 
-                        <div className={`grid ${isNumericField ? 'grid-cols-3' : 'grid-cols-2'} gap-4 text-sm`}>
+                        <div className={`grid ${isCreated ? 'grid-cols-1' : isNumericField ? 'grid-cols-3' : 'grid-cols-2'} gap-4 text-sm`}>
                           <div>
                             <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
-                              Field Changed
+                              {isCreated ? 'Initial Values' : 'Field Changed'}
                             </div>
                             <div className="font-bold text-slate-900">
-                              {fieldNames[record.fieldChanged] || record.fieldChanged}
+                              {isCreated ? (
+                                record.newValue && typeof record.newValue === 'object' ? (
+                                  <span className="font-mono text-sm">
+                                    Price: {formatPrice(record.newValue.price)}đ
+                                    {record.newValue.cost > 0 && <>, Cost: {formatPrice(record.newValue.cost)}đ</>}
+                                    {record.newValue.stock > 0 && <>, Stock: {record.newValue.stock}</>}
+                                  </span>
+                                ) : 'Product created'
+                              ) : (
+                                fieldNames[record.fieldChanged] || record.fieldChanged
+                              )}
                             </div>
                           </div>
-                          <div>
-                            <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
-                              Old → New
+                          {!isCreated && (
+                            <div>
+                              <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
+                                Old → New
+                              </div>
+                              <div className={`text-sm ${isNumericField ? 'font-mono' : ''}`}>
+                                <span className="line-through text-slate-500">
+                                  {isNumericField ? formatPrice(record.oldValue) : record.oldValue || '(empty)'}
+                                </span>
+                                <span className="mx-1.5">→</span>
+                                <span className="font-bold text-slate-900">
+                                  {isNumericField ? formatPrice(record.newValue) : record.newValue || '(empty)'}
+                                </span>
+                              </div>
                             </div>
-                            <div className={`text-sm ${isNumericField ? 'font-mono' : ''}`}>
-                              <span className="line-through text-slate-500">
-                                {isNumericField ? formatPrice(record.oldValue) : record.oldValue || '(empty)'}
-                              </span>
-                              <span className="mx-1.5">→</span>
-                              <span className="font-bold text-slate-900">
-                                {isNumericField ? formatPrice(record.newValue) : record.newValue || '(empty)'}
-                              </span>
-                            </div>
-                          </div>
-                          {isNumericField && (
+                          )}
+                          {!isCreated && isNumericField && (
                             <div>
                               <div className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">
                                 Delta

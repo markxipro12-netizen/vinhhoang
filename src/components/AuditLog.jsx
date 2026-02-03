@@ -220,6 +220,7 @@ export default function AuditLog({ onBack }) {
                 className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
                 <option value="all">All Fields</option>
+                <option value="created">New Products</option>
                 <option value="price">Price</option>
                 {isAdmin && <option value="cost">Cost</option>}
                 <option value="stock">Stock</option>
@@ -277,6 +278,7 @@ export default function AuditLog({ onBack }) {
           <div className="space-y-3">
             {history.map((record, index) => {
               const timestamp = record.changedAt?.toDate?.() || new Date();
+              const isCreated = record.fieldChanged === 'created';
               const isNumericField = ['price', 'cost', 'stock'].includes(record.fieldChanged);
               const isIncrease = record.delta > 0;
 
@@ -287,12 +289,15 @@ export default function AuditLog({ onBack }) {
                 stock: 'Stock',
                 name: 'Product Name',
                 code: 'Product Code',
-                attributes: 'Description/Attributes'
+                attributes: 'Description/Attributes',
+                created: 'New Product'
               };
 
               // Border colors
               let borderColor = '#3b82f6'; // blue for text changes
-              if (isNumericField) {
+              if (isCreated) {
+                borderColor = '#8b5cf6'; // purple for new products
+              } else if (isNumericField) {
                 borderColor = isIncrease ? '#dc2626' : '#059669'; // red/green for numeric
               }
 
@@ -306,11 +311,15 @@ export default function AuditLog({ onBack }) {
                     <div className="flex items-center gap-4">
                       {/* Icon & Indicator */}
                       <div className={`flex items-center justify-center w-12 h-12 rounded-lg ${
-                        isNumericField
-                          ? isIncrease ? 'bg-red-100' : 'bg-emerald-100'
-                          : 'bg-blue-100'
+                        isCreated
+                          ? 'bg-purple-100'
+                          : isNumericField
+                            ? isIncrease ? 'bg-red-100' : 'bg-emerald-100'
+                            : 'bg-blue-100'
                       }`}>
-                        {isNumericField ? (
+                        {isCreated ? (
+                          <Package className="w-6 h-6 text-purple-600" strokeWidth={2.5} />
+                        ) : isNumericField ? (
                           isIncrease ? (
                             <TrendingUp className="w-6 h-6 text-red-600" strokeWidth={2.5} />
                           ) : (
@@ -325,13 +334,15 @@ export default function AuditLog({ onBack }) {
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-1">
                           <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-bold ${
-                            isNumericField
-                              ? isIncrease
-                                ? 'bg-red-100 text-red-700'
-                                : 'bg-emerald-100 text-emerald-700'
-                              : 'bg-blue-100 text-blue-700'
+                            isCreated
+                              ? 'bg-purple-100 text-purple-700'
+                              : isNumericField
+                                ? isIncrease
+                                  ? 'bg-red-100 text-red-700'
+                                  : 'bg-emerald-100 text-emerald-700'
+                                : 'bg-blue-100 text-blue-700'
                           }`}>
-                            {isNumericField ? (isIncrease ? 'INCREASE' : 'DECREASE') : 'MODIFIED'}
+                            {isCreated ? 'NEW PRODUCT' : isNumericField ? (isIncrease ? 'INCREASE' : 'DECREASE') : 'MODIFIED'}
                           </span>
                           <span className="text-xs text-slate-500 font-medium">
                             {timestamp.toLocaleDateString('vi-VN')} at {timestamp.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
@@ -342,19 +353,34 @@ export default function AuditLog({ onBack }) {
                           <span className="font-bold text-slate-900">{record.productName || 'Unknown Product'}</span>
                           <span className="text-slate-500 mx-2">•</span>
                           <span className="text-slate-600">
-                            <span className="font-semibold">{fieldNames[record.fieldChanged] || record.fieldChanged}</span>
-                            {' changed from '}
-                            {isNumericField ? (
+                            {isCreated ? (
                               <>
-                                <span className="font-mono text-slate-900">{formatPrice(record.oldValue)} {['price', 'cost'].includes(record.fieldChanged) ? 'đ' : ''}</span>
-                                {' to '}
-                                <span className="font-mono font-bold text-slate-900">{formatPrice(record.newValue)} {['price', 'cost'].includes(record.fieldChanged) ? 'đ' : ''}</span>
+                                <span className="font-semibold">Product created</span>
+                                {record.newValue && typeof record.newValue === 'object' && (
+                                  <span className="ml-1">
+                                    (Price: <span className="font-mono">{formatPrice(record.newValue.price)}đ</span>
+                                    {record.newValue.cost > 0 && <>, Cost: <span className="font-mono">{formatPrice(record.newValue.cost)}đ</span></>}
+                                    {record.newValue.stock > 0 && <>, Stock: <span className="font-mono">{record.newValue.stock}</span></>})
+                                  </span>
+                                )}
                               </>
                             ) : (
                               <>
-                                <span className="text-slate-900">"{record.oldValue || '(empty)'}"</span>
-                                {' to '}
-                                <span className="font-bold text-slate-900">"{record.newValue || '(empty)'}"</span>
+                                <span className="font-semibold">{fieldNames[record.fieldChanged] || record.fieldChanged}</span>
+                                {' changed from '}
+                                {isNumericField ? (
+                                  <>
+                                    <span className="font-mono text-slate-900">{formatPrice(record.oldValue)} {['price', 'cost'].includes(record.fieldChanged) ? 'đ' : ''}</span>
+                                    {' to '}
+                                    <span className="font-mono font-bold text-slate-900">{formatPrice(record.newValue)} {['price', 'cost'].includes(record.fieldChanged) ? 'đ' : ''}</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <span className="text-slate-900">"{record.oldValue || '(empty)'}"</span>
+                                    {' to '}
+                                    <span className="font-bold text-slate-900">"{record.newValue || '(empty)'}"</span>
+                                  </>
+                                )}
                               </>
                             )}
                           </span>
@@ -379,15 +405,15 @@ export default function AuditLog({ onBack }) {
                         </div>
                       </div>
 
-                      {/* Delta - only for numeric fields */}
-                      {isNumericField && record.delta !== undefined && (
+                      {/* Delta - only for numeric fields (not for created) */}
+                      {!isCreated && isNumericField && record.delta !== undefined && (
                         <div className="text-right">
                           <div className={`text-xl font-black font-mono ${
                             isIncrease ? 'text-red-700' : 'text-emerald-700'
                           }`}>
                             {isIncrease ? '+' : ''}{formatPrice(record.delta)} {['price', 'cost'].includes(record.fieldChanged) ? 'đ' : ''}
                           </div>
-                          {record.oldValue !== 0 && (
+                          {record.oldValue && record.oldValue !== 0 && (
                             <div className="text-xs text-slate-500 font-medium mt-1">
                               {((Math.abs(record.delta) / record.oldValue) * 100).toFixed(1)}%
                             </div>
