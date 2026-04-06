@@ -1,11 +1,12 @@
 // src/components/SmartSearch.jsx - PROFESSIONAL REDESIGN
 import { useState, useEffect, useMemo } from 'react';
-import { Search, Zap, Target, Tag, ChevronDown, ChevronUp, Package, Edit3, Save, X, Upload, History, Clock, LogOut, User as UserIcon, Shield, Filter, TrendingUp, TrendingDown, Database, Box, FileText, LayoutGrid, LayoutList, Activity, ChevronRight } from 'lucide-react';
+import { Search, Zap, Target, Tag, ChevronDown, ChevronUp, Package, Edit3, Save, X, Upload, History, Clock, LogOut, User as UserIcon, Shield, Filter, TrendingUp, TrendingDown, Database, Box, FileText, LayoutGrid, LayoutList, Activity, ChevronRight, Wrench } from 'lucide-react';
 import { db } from '../firebase';
 import { collection, getDocs, doc, updateDoc, addDoc, serverTimestamp, query, where, orderBy, limit } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 import { useAuth } from '../contexts/AuthContext';
 import AuditLog from './AuditLog';
+import PartCodeSearch from './PartCodeSearch';
 
 // ==================== THUẬT TOÁN TÌM KIẾM ====================
 
@@ -404,6 +405,7 @@ export default function SmartSearch() {
   const [viewMode, setViewMode] = useState('card'); // 'card' | 'table'
   const [recentActivities, setRecentActivities] = useState([]); // Hoạt động gần đây
   const [showActivitySidebar, setShowActivitySidebar] = useState(false); // Sidebar toggle
+  const [activeSection, setActiveSection] = useState('products'); // 'products' | 'partcodes'
 
   // Load dữ liệu từ Firestore
   useEffect(() => {
@@ -801,11 +803,37 @@ export default function SmartSearch() {
                 <Database className="w-5 h-5 text-white" strokeWidth={2.5} />
               </div>
               <div>
-                <h1 className="text-xl font-bold text-slate-900 tracking-tight">Product Search</h1>
+                <h1 className="text-xl font-bold text-slate-900 tracking-tight">VH ERP</h1>
                 <p className="text-xs text-slate-500 font-medium">
                   {loading ? 'Loading...' : `${products.length.toLocaleString()} products indexed`}
                 </p>
               </div>
+            </div>
+
+            {/* Section Tabs */}
+            <div className="hidden sm:flex items-center bg-slate-100 rounded-lg p-1 border border-slate-200 mx-4">
+              <button
+                onClick={() => setActiveSection('products')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-bold uppercase tracking-wide transition-all ${
+                  activeSection === 'products'
+                    ? 'bg-white text-slate-900 shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <Database className="w-3.5 h-3.5" strokeWidth={2.5} />
+                Product Search
+              </button>
+              <button
+                onClick={() => setActiveSection('partcodes')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-md text-xs font-bold uppercase tracking-wide transition-all ${
+                  activeSection === 'partcodes'
+                    ? 'bg-slate-900 text-white shadow-sm'
+                    : 'text-slate-500 hover:text-slate-700'
+                }`}
+              >
+                <Wrench className="w-3.5 h-3.5" strokeWidth={2.5} />
+                Part Code Lookup
+              </button>
             </div>
 
             {/* User Actions */}
@@ -916,6 +944,36 @@ export default function SmartSearch() {
           )}
         </div>
       </header>
+
+      {/* Mobile Section Tabs */}
+      <div className="sm:hidden flex items-center gap-1 bg-white border-b border-slate-200 px-4 py-2">
+        <button
+          onClick={() => setActiveSection('products')}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold flex-1 justify-center transition-all ${
+            activeSection === 'products' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'
+          }`}
+        >
+          <Database className="w-3.5 h-3.5" strokeWidth={2.5} />
+          Products
+        </button>
+        <button
+          onClick={() => setActiveSection('partcodes')}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-md text-xs font-bold flex-1 justify-center transition-all ${
+            activeSection === 'partcodes' ? 'bg-slate-900 text-white' : 'text-slate-500 hover:bg-slate-100'
+          }`}
+        >
+          <Wrench className="w-3.5 h-3.5" strokeWidth={2.5} />
+          Part Codes
+        </button>
+      </div>
+
+      {/* Part Code Lookup Section */}
+      {activeSection === 'partcodes' && (
+        <PartCodeSearch />
+      )}
+
+      {/* Product Search Section */}
+      {activeSection === 'products' && <>
 
       {/* Search Bar - Sticky Below Header */}
       <div className="sticky top-[73px] z-40 bg-white border-b border-slate-200 shadow-sm">
@@ -1770,6 +1828,7 @@ export default function SmartSearch() {
           )}
         </div>
       )}
+    </>}
     </div>
   );
 }
